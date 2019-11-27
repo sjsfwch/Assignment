@@ -179,3 +179,5 @@ if __name__=="__main__":
     searcher.checkCorrection('aa',1)
     endTime2=time.time()
     print("cost time is",endTime2-endTime)
+
+
