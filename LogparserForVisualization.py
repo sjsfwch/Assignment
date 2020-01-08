@@ -1,8 +1,9 @@
 import random
 import json
 from tqdm import tqdm
+import os
 PARAM='#PARAM'
-
+DELIMPREFIX="#delim#"
 # 数据结构区
 # ------------------------------------------------------------------------
 '''
@@ -127,8 +128,35 @@ def checkCanMerge2(positionList,paramList1,paramList2):
             return True
     return False
 
+def checkAndGetDelim(word):
+    pos=word.find(DELIMPREFIX)
+    if pos==-1:
+        return False,word
+    else:
+        return True,word[pos+len(DELIMPREFIX):]
 
-def masterMerge(stdLog,subGroup,logDict,paramList,group,threshold):
+def getLogKeyByDelim(log):
+    key=''
+    for word in log:
+        # 不是int说明没做hash，肯定是delim
+        if type(word)==int:
+            key+='*'
+        else:
+            key+=word
+    return key
+
+def groupingByDelim(group):
+    resGroup={}
+    for log in group:
+        logKey=getLogKeyByDelim(log)
+        if logKey not in resGroup.keys():
+            resGroup[logKey]=[log]
+        else:
+            resGroup[logKey].append(log)
+    return resGroup
+
+
+def masterMerge(stdLog,subGroup,logDict,paramList,group,threshold=3):
     template=stdLog
     first,canMerge=True,False
     sortedSubgroupKeys=sorted(subGroup.keys(),key=lambda d:d.count('1'))
@@ -153,15 +181,15 @@ def masterMerge(stdLog,subGroup,logDict,paramList,group,threshold):
             canMerge1=checkCanMerge1(key,threshold,(1,-0.5))
             positionList=getParamPosition(key)
             canMerge2=checkCanMerge2(positionList,paramList,subGroup[key])
-            canMerge=canMerge1 or canMerge2
+            canMerge=canMerge2
         if canMerge:
             template=mergeByDis(template,key)
             paramList=mergeParamLists(paramList,subGroup[key])
             for log in logDict[key]:
                 group.remove(log)
                 count+=1
-            else:
-                break
+        else:
+            break
     print("合并成功，共合并{}条日志".format(count))
     return template,paramList,group,count
 
@@ -179,8 +207,9 @@ class Logparser:
         self.hashGroup={}
         self.data=[]
         self.logCount=0
+        self.allTemplates=[]
 
-    def readFile(self,maxCount=1000):
+    def readFile(self,maxCount=500000):
         file=open(self.filePath,'r')
         count=0
         line=file.readline()
@@ -199,7 +228,12 @@ class Logparser:
         for log in self.data:
             logVec=[]
             for word in log:
-                hashValue=hash(word)
+                isDelim,word=checkAndGetDelim(word)
+                # delim不哈希
+                if isDelim:
+                    hashValue=word
+                else:
+                    hashValue=hash(word)
                 if hashValue not in self.hashDict.keys():
                     self.hashDict[hashValue]=word
                 logVec.append(hashValue)
@@ -217,30 +251,35 @@ class Logparser:
 
     def clustering(self,minThreshold=3,thresholdRate=0.3):
         res={}
+        totalLog=0
+        # 先对每个group 按照delim绝对匹配分组
         for group in self.hashGroup.values():
-            groupLen=len(group[0])
+            groupsByDelim=groupingByDelim(group)
             templates=[]
-            pbar=tqdm(total=len(group))
-            threshold=min(len(group[0])*thresholdRate,minThreshold)
-            while len(group)>0:
-                # 三个结构见数据结构区
-                subGroup,logDict,paramList={},{},[]
-                # 随机选一条log
-                stdLogIdx=random.randint(0,len(group)-1)
-                stdLog=group[stdLogIdx]
-                paramList=mergeLogToParamList(stdLog,paramList)
-                group.remove(stdLog)
-                # 获取subGroup logDict
-                subGroup,logDict=divideGroupByDis(stdLog,group)
-                # merge
-                template,paramList,group,count=masterMerge(stdLog,subGroup,logDict,paramList,group,threshold)
-                pbar.update(count)
-                template=self.antiHash(template)
-                templates.append({'template':template,'count':count,'paramList':paramList})
+            for group in groupsByDelim.values():
+                groupLen=len(group[0])
+                threshold=min(len(group[0])*thresholdRate,minThreshold)
+                while len(group)>0:
+                    # 三个结构见数据结构区
+                    subGroup,logDict,paramList={},{},[]
+                    # 随机选一条log
+                    stdLogIdx=random.randint(0,len(group)-1)
+                    stdLog=group[stdLogIdx]
+                    paramList=mergeLogToParamList(stdLog,paramList)
+                    group.remove(stdLog)
+                    # 获取subGroup logDict
+                    subGroup,logDict=divideGroupByDis(stdLog,group)
+                    # merge
+                    template,paramList,group,count=masterMerge(stdLog,subGroup,logDict,paramList,group,threshold)
+                    template=self.antiHash(template)
+                    totalLog+=count
+                    templates.append({'template':template,'count':count,'paramList':paramList})
             res[groupLen]={"template":templates}
         self.antiHashRes(res)
         with open('newRes','w') as f:
             json.dump(res,f,indent=2)
+        self.outputAsSpecificFormat(res)
+        print("模版提取完成，共有{}条log".format(totalLog))
     
     def oneKey(self):
         self.readFile()
@@ -251,6 +290,7 @@ class Logparser:
         for group in res.values():
             for template in group["template"]:
                 template['paramList']=self.antiHashParamList(template['paramList'])
+                self.allTemplates.append({'count':template['count'],'paramList':template['paramList']})
         return res
 
     def antiHashParamList(self,paramList):
@@ -263,15 +303,60 @@ class Logparser:
         return antiRes
     
     def outputAsSpecificFormat(self, res):
+        assert(self.allTemplates)
         output = {'model': {'profile': {
             'count': self.logCount,
             'max_value': 1541473200000.0,
             'min_value': 1541383200000.0,
             'window_size': 1541473200000.0-1541383200000.0,
             'cnt_by_window': [self.logCount]
-        }}}
+        },
+        'templates':[]
+        }}
+        for template in self.allTemplates:
+            newTemplate={
+                'profile':{
+                    'count': template['count'],
+                    'max_value': 1541473200000.0,
+                    'min_value': 1541383200000.0,
+                    'window_size': 1541473200000.0-1541383200000.0,
+                    'cnt_by_window': template['count']
+                },
+                'samples':[],
+                'token_sequences':[]
+            }
+            tokens=[]
+            count=0
+            for param in template['paramList']:
+                # 只有一个词 说明是模板单词，否则是变量
+                if len(param.keys())==1:
+                    tokens.append({'type':'word','value':list(param.keys())[0]+' '})
+                else:
+                    tem={
+                        'profile':{'type':'enumerable','counts':[],'values':[]},
+                        'index':count,
+                        'value':'',
+                        'subtype':'string',
+                        'var_group':'',
+                        'type':'tree_var'
+                    }
+                    for value in param.items():
+                        tem['profile']['values'].append(value[0])
+                        tem['profile']['counts'].append(value[1])
+                    count+=1
+                    tokens.append(tem)
+            newTemplate['token_sequences']=tokens
+            output["model"]["templates"].append(newTemplate)
+        with open('newmodel','w') as f:
+            json.dump(output,f,indent=2)
+
+
+
+
 
 
 if __name__=="__main__":
     lp=Logparser('guangda')
     lp.oneKey()
+    os.system("rm ../../carpenter-web/data/spd/model.json")
+    os.system("mv newModel ../../carpenter-web/data/spd/model.json")

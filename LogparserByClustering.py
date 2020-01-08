@@ -41,16 +41,16 @@ def checkPositionParam(positionList,setList,threshold=5):
             return False
     return True
 
-def checkCanMerge1(key,threshold,pinish):
+def checkCanMerge1(key,threshold,punish):
     '''
-    pinish是一个turple，第一项是遇到1的惩罚项，第二项是遇到0的惩罚项
+    punish是一个turple，第一项是遇到1的惩罚项，第二项是遇到0的惩罚项
     '''
     count=0
     for c in key:
         if c=='1':
-            count+=pinish[0]
+            count+=punish[0]
         else:
-            count+=pinish[1]
+            count+=punish[1]
         count=max(0,count)
         if count<=threshold:
             return True
@@ -354,7 +354,7 @@ class Logparser:
                     # 第一次
                     if first:
                         first=False
-                        # 计算canMerge1 pinish(遇1的，遇0的)
+                        # 计算canMerge1 punish(遇1的，遇0的)
                         canMerge1=checkCanMerge1(key,threshold,(1,-0.5))
                         # 计算canMerge2
                         paramPosition=getParamPosition(key)
